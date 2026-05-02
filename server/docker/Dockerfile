@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for building the tcp-server binary
-FROM rust:stable AS builder
+FROM rust:latest AS builder
 
 WORKDIR /usr/src/app
 
@@ -13,7 +13,7 @@ RUN cargo fetch --locked
 COPY . .
 RUN cargo build --release --bin tcp-server --locked
 
-FROM rust:stable AS runtime
+FROM rust:latest AS runtime
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
