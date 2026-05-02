@@ -3,9 +3,6 @@ target
 .github
 Dockerfile
 docker/Dockerfile
-server/docker/Dockerfile
-server/.env
-server/.env.*
 *.log
 *.tmp
 .env
