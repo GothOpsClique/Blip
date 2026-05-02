@@ -1,0 +1,13 @@
+target
+.git
+.github
+Dockerfile
+docker/Dockerfile
+server/docker/Dockerfile
+server/.env
+server/.env.*
+*.log
+*.tmp
+.env
+.env.*
+**/node_modules
