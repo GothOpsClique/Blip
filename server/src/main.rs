@@ -1,11 +1,18 @@
 use log::error;
 use log::info;
+use protocol::{read_message, send_message};
+use std::collections::HashMap;
 use std::env;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::{Mutex, mpsc};
 use tokio::task;
+
+type ClientId = usize;
+type Tx = mpsc::UnboundedSender<String>;
+type Clients = Arc<Mutex<HashMap<ClientId, Tx>>>;
 
 #[tokio::main]
 async fn main() {
@@ -24,37 +31,77 @@ async fn handle_connections() -> std::io::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
     info!("Server listening on {}", addr);
 
+    let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
+    let next_client_id = Arc::new(AtomicUsize::new(1));
+
     while let Ok((stream, peer)) = listener.accept().await {
-        info!("Client connected: {}", peer);
+        let client_id = next_client_id.fetch_add(1, Ordering::Relaxed);
+        let clients = clients.clone();
+        info!("Client connected: {} (id={})", peer, client_id);
+
         task::spawn(async move {
-            if let Err(e) = handle_client(stream).await {
-                error!("Connection error: {}", e);
+            if let Err(e) = handle_client(stream, client_id, clients).await {
+                error!("Connection error for client {}: {}", client_id, e);
             }
         });
     }
     Ok(())
 }
 
-async fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
+async fn handle_client(
+    stream: TcpStream,
+    client_id: ClientId,
+    clients: Clients,
+) -> std::io::Result<()> {
     let peer_addr = stream
         .peer_addr()
         .map_or_else(|_| "unknown".parse().unwrap(), |addr| addr.to_string());
-    info!("Handling client connection from {}", peer_addr);
+    info!("Handling client {} from {}", client_id, peer_addr);
 
-    let mut buffer = [0; 1024];
-    loop {
-        let n = stream.read(&mut buffer).await?;
-        if n == 0 {
-            info!("Client {} disconnected", peer_addr);
-            return Ok(());
+    let (mut reader, mut writer) = stream.into_split();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    clients.lock().await.insert(client_id, tx);
+
+    let write_task = task::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if let Err(err) = send_message(&mut writer, &msg).await {
+                error!("Failed to write to client {}: {}", client_id, err);
+                break;
+            }
         }
+    });
 
-        let received = String::from_utf8_lossy(&buffer[..n]);
-        info!("Received from {}: {}", peer_addr, received);
-
-        if let Err(e) = stream.write_all(&buffer[..n]).await {
-            error!("Failed to send data to {}: {}", peer_addr, e);
-            return Err(e);
+    loop {
+        match read_message(&mut reader).await {
+            Ok(Some(message)) => {
+                let formatted = format!("{}: {}", peer_addr, message);
+                info!("Broadcasting from {}: {}", peer_addr, formatted);
+                broadcast_message(&clients, formatted).await;
+            }
+            Ok(None) => {
+                info!("Client {} disconnected", client_id);
+                break;
+            }
+            Err(err) => {
+                error!("Error reading from client {}: {}", client_id, err);
+                break;
+            }
         }
     }
+
+    clients.lock().await.remove(&client_id);
+    write_task.await.expect("write task join failed");
+    Ok(())
+}
+
+async fn broadcast_message(clients: &Clients, message: String) {
+    let mut clients = clients.lock().await;
+    clients.retain(|client_id, tx| match tx.send(message.clone()) {
+        Ok(_) => true,
+        Err(err) => {
+            error!("Removing disconnected client {}: {}", client_id, err);
+            false
+        }
+    });
 }
