@@ -1,0 +1,8 @@
+services:
+  blip-server:
+    image: ghcr.io/gothopsclique/blip:main
+    restart: unless-stopped
+    ports: 
+      - "6666:6666"
+    env_file:
+      - .env
