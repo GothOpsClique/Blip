@@ -1,0 +1,38 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug tcp-server",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--package",
+                    "tcp-server",
+                    "--bin",
+                    "tcp-server",
+                    "--"
+                ]
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug tcp-client",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--package",
+                    "tcp-client",
+                    "--bin",
+                    "tcp-client",
+                    "--",
+                    "localhost:6666"
+                ]
+            },
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
