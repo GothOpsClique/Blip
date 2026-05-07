@@ -46,6 +46,12 @@ Run the container:
 podman run --rm -p 6666:6666 blip-server
 ```
 
+Or with compose:
+
+```bash
+podman compose -f compose.yml up
+```
+
 Then connect with the client as above.
 
 ### Tests
@@ -53,5 +59,5 @@ Then connect with the client as above.
 Run the workspace tests with:
 
 ```bash
-cargo test --workspace --all-targets --locked
+cargo test --workspace --all-targets
 ```
