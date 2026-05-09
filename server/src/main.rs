@@ -1,5 +1,6 @@
 use log::error;
 use log::info;
+use protocol::Message;
 use protocol::{read_message, send_message};
 use std::collections::HashMap;
 use std::env;
@@ -14,6 +15,13 @@ type ClientId = usize;
 type Tx = mpsc::UnboundedSender<String>;
 type Clients = Arc<Mutex<HashMap<ClientId, Tx>>>;
 
+type ChannelId = usize;
+type Channels = Arc<Mutex<HashMap<ChannelId, Channel>>>;
+struct Channel {
+    name: String,
+}
+
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -27,6 +35,15 @@ async fn handle_connections() -> std::io::Result<()> {
     let addr = env::args()
         .nth(1)
         .unwrap_or_else(|| "localhost:6666".to_string());
+
+    let channel_names: Vec<String> = vec!["general".to_string()];
+    let channels: Channels = Arc::new(Mutex::new(HashMap::new()));
+    let next_channel_id = Arc::new(AtomicUsize::new(1));
+
+    for name in channel_names {
+        let channel_id = next_channel_id.fetch_add(1, Ordering::Relaxed);
+        channels.lock().await.insert(channel_id, Channel { name: name });
+    }
 
     let listener = TcpListener::bind(&addr).await?;
     info!("Server listening on {}", addr);
@@ -65,7 +82,7 @@ async fn handle_client(
 
     let write_task = task::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if let Err(err) = send_message(&mut writer, &msg).await {
+            if let Err(err) = send_message(&mut writer, Message { msg: &msg, channel: 1 }).await {
                 error!("Failed to write to client {}: {}", client_id, err);
                 break;
             }
@@ -77,7 +94,7 @@ async fn handle_client(
             Ok(Some(message)) => {
                 let formatted = format!("{}: {}", peer_addr, message);
                 info!("Broadcasting from {}: {}", peer_addr, formatted);
-                broadcast_message(&clients, formatted).await;
+                broadcast_message(&clients, Message { msg: &formatted, channel: 1 }).await;
             }
             Ok(None) => {
                 info!("Client {} disconnected", client_id);
@@ -95,9 +112,9 @@ async fn handle_client(
     Ok(())
 }
 
-async fn broadcast_message(clients: &Clients, message: String) {
+async fn broadcast_message(clients: &Clients, message: Message<'_>) {
     let mut clients = clients.lock().await;
-    clients.retain(|client_id, tx| match tx.send(message.clone()) {
+    clients.retain(|client_id, tx| match tx.send(message.msg.clone()) {
         Ok(_) => true,
         Err(err) => {
             error!("Removing disconnected client {}: {}", client_id, err);

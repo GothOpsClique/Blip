@@ -1,11 +1,16 @@
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub async fn send_message<W>(stream: &mut W, msg: &str) -> io::Result<()>
+pub struct Message<'a> {
+	pub msg: &'a String,
+	pub channel: usize
+}
+
+pub async fn send_message<W>(stream: &mut W, message: Message<'_>) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    let bytes = msg.as_bytes();
+    let bytes = message.msg.as_bytes();
     let len = bytes.len() as u32;
 
     stream.write_u32(len).await?;

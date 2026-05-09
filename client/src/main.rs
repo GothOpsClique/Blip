@@ -1,4 +1,5 @@
 use log::{error, info};
+use protocol::Message;
 use std::env;
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
@@ -42,7 +43,7 @@ async fn main() -> io::Result<()> {
             continue;
         }
 
-        if let Err(e) = protocol::send_message(&mut writer, trimmed).await {
+        if let Err(e) = protocol::send_message(&mut writer, Message { msg: &trimmed.to_string(), channel: 1 }).await {
             eprintln!("Error sending message: {}", e);
             break;
         }
