@@ -1,34 +1,15 @@
-use std::io;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+include!(concat!(env!("OUT_DIR"), "/blip.rs"));
 
-pub struct Message<'a> {
-	pub msg: &'a String,
-	pub channel: usize
+use prost::Message as ProstMessage;
+
+pub fn encode_message(message: &ChatMessage) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    message
+        .encode(&mut buffer)
+        .expect("failed to encode protobuf message");
+    buffer
 }
 
-pub async fn send_message<W>(stream: &mut W, message: Message<'_>) -> io::Result<()>
-where
-    W: AsyncWrite + Unpin,
-{
-    let bytes = message.msg.as_bytes();
-    let len = bytes.len() as u32;
-
-    stream.write_u32(len).await?;
-    stream.write_all(bytes).await?;
-    Ok(())
-}
-
-pub async fn read_message<R>(stream: &mut R) -> io::Result<Option<String>>
-where
-    R: AsyncRead + Unpin,
-{
-    let len = match stream.read_u32().await {
-        Ok(len) => len,
-        Err(_) => return Ok(None), // connection closed
-    };
-
-    let mut buf = vec![0u8; len as usize];
-    stream.read_exact(&mut buf).await?;
-
-    Ok(Some(String::from_utf8_lossy(&buf).to_string()))
+pub fn decode_message(bytes: &[u8]) -> Result<ChatMessage, prost::DecodeError> {
+    ChatMessage::decode(bytes)
 }

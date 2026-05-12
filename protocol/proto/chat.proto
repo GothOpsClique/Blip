@@ -1,0 +1,17 @@
+syntax = "proto3";
+package blip;
+
+message Attachment {
+  string url = 1;
+  int64 size = 2;
+  string mime_type = 3;
+}
+
+message ChatMessage {
+  string id = 1;
+  string sender = 2;
+  int32 channel = 3;
+  string content = 4;
+  int64 timestamp = 5;
+  repeated Attachment attachments = 6;
+}
