@@ -94,7 +94,10 @@ async fn handle_client(
                         chat.timestamp = current_timestamp_millis();
                     }
 
-                    info!("Broadcasting from {}: {}", chat.sender, chat.content);
+                    info!(
+                        "Broadcasting from {} on channel {}: {}",
+                        chat.sender, chat.channel, chat.content
+                    );
                     broadcast_message(&clients, encode_message(&chat)).await;
                 }
                 Err(err) => {

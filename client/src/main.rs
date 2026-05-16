@@ -16,6 +16,7 @@ async fn main() -> io::Result<()> {
     let username = env::args()
         .nth(2)
         .unwrap_or_else(|| "anonymous".to_string());
+    let mut channel = 1;
 
     let url = Url::parse(&format!("ws://{}", addr)).expect("Invalid WebSocket URL");
     let (ws_stream, _) = connect_async(url)
@@ -30,9 +31,11 @@ async fn main() -> io::Result<()> {
             match frame {
                 Ok(WsMessage::Binary(bytes)) => match decode_message(&bytes) {
                     Ok(message) => {
-                        println!("{}: {}", message.sender, message.content);
-                        for attachment in message.attachments {
-                            println!("  attachment: {}", attachment.url);
+                        if message.channel == channel {
+                            println!("{}: {}", message.sender, message.content);
+                            for attachment in message.attachments {
+                                println!("  attachment: {}", attachment.url);
+                            }
                         }
                     }
                     Err(err) => {
@@ -64,7 +67,7 @@ async fn main() -> io::Result<()> {
 
         let mut message = ChatMessage::default();
         message.sender = username.clone();
-        message.channel = 1;
+        message.channel = channel;
         message.timestamp = current_timestamp_millis();
 
         if let Some(url) = trimmed.strip_prefix("/attach ") {
@@ -75,6 +78,16 @@ async fn main() -> io::Result<()> {
             };
             message.attachments.push(attachment);
             message.content = String::from("sent an attachment");
+        } else if let Some(channel_command) = trimmed.strip_prefix("/channel ") {
+            match channel_command.parse::<i32>() {
+                Ok(chan) => {
+                    channel = chan;
+                    message.channel = chan
+                }
+                Err(err) => {
+                    error!("Invalid channel id. {}", err);
+                }
+            }
         } else {
             message.content = trimmed.to_string();
         }
