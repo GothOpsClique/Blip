@@ -1,26 +1,20 @@
-use log::error;
-use log::info;
-use protocol::Message;
-use protocol::{read_message, send_message};
+use futures_util::{SinkExt, StreamExt};
+use log::{error, info};
+use protocol::{decode_message, encode_message};
 use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task;
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 type ClientId = usize;
-type Tx = mpsc::UnboundedSender<String>;
+type Tx = mpsc::UnboundedSender<Vec<u8>>;
 type Clients = Arc<Mutex<HashMap<ClientId, Tx>>>;
-
-type ChannelId = usize;
-type Channels = Arc<Mutex<HashMap<ChannelId, Channel>>>;
-struct Channel {
-    name: String,
-}
-
 
 #[tokio::main]
 async fn main() {
@@ -35,15 +29,6 @@ async fn handle_connections() -> std::io::Result<()> {
     let addr = env::args()
         .nth(1)
         .unwrap_or_else(|| "localhost:6666".to_string());
-
-    let channel_names: Vec<String> = vec!["general".to_string()];
-    let channels: Channels = Arc::new(Mutex::new(HashMap::new()));
-    let next_channel_id = Arc::new(AtomicUsize::new(1));
-
-    for name in channel_names {
-        let channel_id = next_channel_id.fetch_add(1, Ordering::Relaxed);
-        channels.lock().await.insert(channel_id, Channel { name: name });
-    }
 
     let listener = TcpListener::bind(&addr).await?;
     info!("Server listening on {}", addr);
@@ -73,32 +58,61 @@ async fn handle_client(
     let peer_addr = stream
         .peer_addr()
         .map_or_else(|_| "unknown".parse().unwrap(), |addr| addr.to_string());
-    info!("Handling client {} from {}", client_id, peer_addr);
 
-    let (mut reader, mut writer) = stream.into_split();
+    let ws_stream = accept_async(stream)
+        .await
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+    info!(
+        "WebSocket handshake completed for client {} from {}",
+        client_id, peer_addr
+    );
+
+    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
 
     clients.lock().await.insert(client_id, tx);
 
     let write_task = task::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if let Err(err) = send_message(&mut writer, Message { msg: &msg, channel: 1 }).await {
-                error!("Failed to write to client {}: {}", client_id, err);
+        while let Some(bytes) = rx.recv().await {
+            if ws_sender.send(WsMessage::Binary(bytes)).await.is_err() {
                 break;
             }
         }
     });
 
-    loop {
-        match read_message(&mut reader).await {
-            Ok(Some(message)) => {
-                let formatted = format!("{}: {}", peer_addr, message);
-                info!("Broadcasting from {}: {}", peer_addr, formatted);
-                broadcast_message(&clients, Message { msg: &formatted, channel: 1 }).await;
-            }
-            Ok(None) => {
+    while let Some(message) = ws_receiver.next().await {
+        match message {
+            Ok(WsMessage::Binary(bytes)) => match decode_message(&bytes) {
+                Ok(mut chat) => {
+                    if chat.sender.is_empty() {
+                        chat.sender = peer_addr.clone();
+                    }
+                    if chat.id.is_empty() {
+                        chat.id = format!("{}-{}", client_id, current_timestamp_millis());
+                    }
+                    if chat.timestamp == 0 {
+                        chat.timestamp = current_timestamp_millis();
+                    }
+
+                    info!(
+                        "Broadcasting from {} on channel {}: {}",
+                        chat.sender, chat.channel, chat.content
+                    );
+                    broadcast_message(&clients, encode_message(&chat)).await;
+                }
+                Err(err) => {
+                    error!(
+                        "Invalid protobuf message from client {}: {}",
+                        client_id, err
+                    );
+                }
+            },
+            Ok(WsMessage::Close(_)) => {
                 info!("Client {} disconnected", client_id);
                 break;
+            }
+            Ok(_) => {
+                // Ignore ping/pong/text frames for this prototype
             }
             Err(err) => {
                 error!("Error reading from client {}: {}", client_id, err);
@@ -112,13 +126,20 @@ async fn handle_client(
     Ok(())
 }
 
-async fn broadcast_message(clients: &Clients, message: Message<'_>) {
+async fn broadcast_message(clients: &Clients, message: Vec<u8>) {
     let mut clients = clients.lock().await;
-    clients.retain(|client_id, tx| match tx.send(message.msg.clone()) {
+    clients.retain(|client_id, tx| match tx.send(message.clone()) {
         Ok(_) => true,
         Err(err) => {
             error!("Removing disconnected client {}: {}", client_id, err);
             false
         }
     });
+}
+
+fn current_timestamp_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
