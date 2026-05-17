@@ -14,7 +14,8 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 type ClientId = usize;
 type Tx = mpsc::UnboundedSender<Vec<u8>>;
-type Clients = Arc<Mutex<HashMap<ClientId, Tx>>>;
+type ClientInfo = (Tx, i32);
+type Clients = Arc<Mutex<HashMap<ClientId, ClientInfo>>>;
 
 #[tokio::main]
 async fn main() {
@@ -70,7 +71,8 @@ async fn handle_client(
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    clients.lock().await.insert(client_id, tx);
+    // Start each client on channel 1 by default.
+    clients.lock().await.insert(client_id, (tx, 1));
 
     let write_task = task::spawn(async move {
         while let Some(bytes) = rx.recv().await {
@@ -94,11 +96,24 @@ async fn handle_client(
                         chat.timestamp = current_timestamp_millis();
                     }
 
+                    // Track the client's current channel from their last message.
+                    {
+                        let mut clients_guard = clients.lock().await;
+                        if let Some(client_info) = clients_guard.get_mut(&client_id) {
+                            client_info.1 = chat.channel;
+                        }
+                    }
+
+                    if chat.content.is_empty() && chat.attachments.is_empty() {
+                        info!("Client {} switched to channel {}", client_id, chat.channel);
+                        continue;
+                    }
+
                     info!(
                         "Broadcasting from {} on channel {}: {}",
                         chat.sender, chat.channel, chat.content
                     );
-                    broadcast_message(&clients, encode_message(&chat)).await;
+                    broadcast_message(&clients, chat.channel, encode_message(&chat)).await;
                 }
                 Err(err) => {
                     error!(
@@ -126,13 +141,19 @@ async fn handle_client(
     Ok(())
 }
 
-async fn broadcast_message(clients: &Clients, message: Vec<u8>) {
+async fn broadcast_message(clients: &Clients, channel: i32, message: Vec<u8>) {
     let mut clients = clients.lock().await;
-    clients.retain(|client_id, tx| match tx.send(message.clone()) {
-        Ok(_) => true,
-        Err(err) => {
-            error!("Removing disconnected client {}: {}", client_id, err);
-            false
+    clients.retain(|client_id, (tx, client_channel)| {
+        if *client_channel != channel {
+            return true;
+        }
+
+        match tx.send(message.clone()) {
+            Ok(_) => true,
+            Err(err) => {
+                error!("Removing disconnected client {}: {}", client_id, err);
+                false
+            }
         }
     });
 }
